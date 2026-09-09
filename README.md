@@ -133,6 +133,20 @@ for it. A background watcher can't, so it has to be granted ahead of time:
 Do this once per machine. It does not need repeating after a Discord or
 Vencord update.
 
+### Why the app gets re-signed after every patch
+
+Renaming or rewriting `app.asar` invalidates whatever Discord was already
+signed with: its `CodeResources` manifest hashes the original file
+contents, so afterward `codesign`/Gatekeeper reports "a sealed resource
+is missing or invalid" and macOS refuses to open the app at all
+("Discord is damaged and can't be opened"), not merely a bypassable
+warning. `vencord_patch.py` re-signs the app ad-hoc (`codesign --force
+--deep --sign -`) as the last step of every patch to fix this
+automatically; there is nothing to do here yourself. Worth knowing:
+since this changes what Discord looks like to macOS, it can trigger a
+one-time re-prompt for camera/microphone/screen-recording permissions
+the first time it happens.
+
 ### Why macOS patches itself instead of driving a CLI
 
 The Windows watcher shells out to `VencordInstallerCli.exe`, and the official

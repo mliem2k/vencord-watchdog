@@ -16,6 +16,7 @@ Exit codes: 0 = patched successfully, 1 = failed.
 import json
 import os
 import struct
+import subprocess
 import sys
 import time
 import urllib.error
@@ -231,6 +232,33 @@ def install_openasar(resources_dir):
     download(OPENASAR_DOWNLOAD_URL, asar_path)
 
 
+def resign_app(resources_dir):
+    """Replaces Discord's now-broken code signature with an ad-hoc one.
+
+    Renaming/rewriting app.asar (and OpenAsar's asar) invalidates whatever
+    the app was previously signed with: its CodeResources manifest hashes
+    the original file contents, so codesign/Gatekeeper afterward reports
+    "a sealed resource is missing or invalid" and macOS refuses to launch
+    the app at all ("... is damaged and can't be opened"), not merely a
+    bypassable warning. Re-signing ad-hoc (no real identity, `--sign -`)
+    is self-consistent with the new contents, which is enough for macOS to
+    launch it normally as long as it isn't quarantine-flagged (a locally
+    modified, already-installed app normally isn't). This has no upstream
+    Go source to mirror: the reference installer has no codesign handling
+    at all, macOS is the one platform where modifying the bundle needs it.
+    One side effect worth knowing about: this can change what Discord
+    looks like to TCC (camera/mic/screen-recording), so macOS may prompt
+    to re-grant those permissions once after the first re-sign.
+    """
+    app_bundle = os.path.dirname(os.path.dirname(resources_dir))
+    subprocess.run(
+        ["codesign", "--force", "--deep", "--sign", "-", app_bundle],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def run(resources_dir):
     install_latest_vencord_builds()
     log("Patching Vencord into " + resources_dir + "...")
@@ -249,6 +277,10 @@ def run(resources_dir):
         log("Applying OpenAsar...")
         install_openasar(resources_dir)
         log("OpenAsar applied.")
+
+    log("Re-signing app bundle (ad-hoc) to repair the broken code signature...")
+    resign_app(resources_dir)
+    log("Re-signed.")
 
 
 if __name__ == "__main__":
