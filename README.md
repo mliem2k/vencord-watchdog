@@ -6,7 +6,7 @@ patched into Discord automatically, every time Discord updates.
 ## The problem
 
 Discord's desktop client auto-updates by dropping a brand new, completely
-unpatched `app-X.Y.Z` folder. That silently wipes any Vencord/OpenAsar patch —
+unpatched `app-X.Y.Z` folder. That silently wipes any Vencord/OpenAsar patch:
 you're back to stock Discord until you notice and re-run the installer by
 hand.
 
@@ -20,15 +20,17 @@ then:
    reapplying whatever was cached locally).
 2. Re-applies **OpenAsar** on top, in that order (Vencord first, then
    OpenAsar, see [why order matters](#why-vencord-before-openasar) below).
+   Off by default on macOS, see the
+   [known issue](#known-issue-openasar-can-hang-on-macos) below.
 3. Closes and reopens Discord around the patch, so the running app actually
    loads the newly patched code.
 
 ## Platforms
 
 - **Windows**: done, see [`windows/`](windows/).
-- **macOS**: patching mechanics done and verified, but see the
-  [known issue](#known-issue-macos-can-hang-after-patching) below before
-  relying on it, see [`macos/`](macos/).
+- **macOS**: done for Vencord; OpenAsar has a known issue and is off by
+  default, see [`macos/`](macos/) and the
+  [known issue](#known-issue-openasar-can-hang-on-macos) below.
 
 ## Windows setup
 
@@ -75,23 +77,20 @@ Vencord-detection logic rather than the clean stub chain.
 
 ## macOS setup
 
-### Known issue: macOS can hang after patching
+### Known issue: OpenAsar can hang on macOS
 
-Live testing turned up a real, unresolved bug: with only Vencord's stub
-patched in (no OpenAsar involved), Discord's renderer loads Vencord's
-plugin manager, starts the first plugin, then hangs indefinitely right
-after the gateway `FAST CONNECT` call, never reaching the main UI, a
-black window. An unpatched Discord reliably reaches the ready state
-every time under the same conditions; a Vencord-patched one hung every
-time this was tried. The cause is not yet identified (still open: is
-this specific to the exact Vencord build fetched from its latest
-release, a plugin compatibility issue with this Discord version, or
-something about the patch sequence itself). Until this is root-caused,
-treat the macOS watcher as not yet safe to run unattended: the patching
-mechanics (writing the stub, layering OpenAsar, re-signing) are verified
-correct and match upstream, but the patched result can leave Discord
-unusable until manually restored from a backup. Contributions
-investigating this are very welcome.
+Live testing found a real bug in OpenAsar itself (not in this project or
+in Vencord): its own module update check can hit "Host error" against a
+real, pending Discord update and then hang indefinitely retrying,
+"checking for updates" forever with no crash and no error, just a stuck
+splash screen. Reproduced repeatedly with an unmodified copy of the
+official [Vencord Installer](https://github.com/Vencord/Installer)'s own
+CLI, so this isn't specific to this project's patcher. Vencord alone,
+with no OpenAsar involved, does not have this problem. Until it's
+root-caused, `macos/patcher` skips OpenAsar by default (set
+`VENCORD_WATCHDOG_ENABLE_OPENASAR=1` to opt in anyway); Vencord itself
+was verified to launch reliably across many repeated patch/relaunch
+cycles.
 
 Requirements:
 - Discord.app installed under `/Applications` (or `~/Applications`).
@@ -167,8 +166,32 @@ warning. The patch helper re-signs the app ad-hoc (`codesign --force
 --deep --sign -`) as the last step of every patch to fix this
 automatically; there is nothing to do here yourself. Worth knowing:
 since this changes what Discord looks like to macOS, it can trigger a
-one-time re-prompt for camera/microphone/screen-recording permissions
-the first time it happens.
+one-time Keychain prompt ("Discord wants to use your confidential
+information stored in 'discord Safe Storage'") the first time it
+happens; click Always Allow so it doesn't ask again. Discord is already
+fully logged in and usable regardless of how that prompt is answered.
+
+### Why Krisp (voice noise suppression) gets disabled
+
+A second, sharper consequence of the same re-signing: Discord's Krisp
+native module (`discord_krisp.node`, AI noise suppression for voice
+chat, a separate feature from voice chat itself) does its own signature
+check on startup, and instead of failing gracefully when the app isn't
+signed with Discord's real certificate, it segfaults. Electron responds
+to that crash by immediately relaunching a fresh renderer, which hits
+the identical crash and gets relaunched again, forever: an infinite
+crash loop that looks exactly like a plain hang, a black window that
+never paints anything, no error dialog. Confirmed directly: an
+otherwise-identically-patched, ad-hoc-signed Discord reaches full
+interactivity reliably with Krisp's module renamed aside, and crash
+loops every single time with it present. `macos/patcher` renames
+`discord_krisp.node` (wherever Discord's own module updater has it
+installed, a version-numbered path outside Discord.app itself) aside on
+every patch cycle, since Discord's updater can silently reinstall a
+fresh copy independent of any repatch. This costs Krisp's noise
+suppression specifically; voice chat itself (`discord_voice`, a
+different module) is untouched. There's no way around this without
+Discord's real private signing key, which nobody outside Discord has.
 
 ### Why macOS patches itself instead of driving a CLI
 

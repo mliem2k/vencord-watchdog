@@ -340,6 +340,53 @@ func resignApp(resourcesDir string) error {
 	return nil
 }
 
+// disableKrisp renames aside Discord's Krisp (AI noise suppression)
+// native module, discord_krisp.node. Krisp's own native code calls a
+// signature check (discord::util::IsSignedBy) during voice engine init
+// that expects Discord's real Apple-issued certificate; once the app is
+// re-signed ad-hoc (resignApp above), that check finds no matching
+// certificate and segfaults instead of failing gracefully, and Electron
+// respawns a fresh renderer that hits the identical crash immediately,
+// an infinite crash loop that presents as a black, unresponsive window,
+// never a visible error. Verified directly: with Krisp's .node file
+// moved aside, an otherwise-identically-patched, ad-hoc-signed Discord
+// reaches full interactivity normally; with it present, it crash-loops
+// every time. This costs Krisp's noise suppression specifically, not
+// voice chat itself (a separate module, discord_voice, untouched).
+//
+// The module lives outside Discord.app entirely, in a version-numbered
+// directory under ~/Library/Application Support/discord that Discord's
+// own module updater can re-populate independently of any repatch, so
+// this has to run every cycle, not just once.
+func disableKrisp() error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	base := filepath.Join(homeDir, "Library", "Application Support", "discord")
+	patterns := []string{
+		filepath.Join(base, "*", "modules", "discord_krisp", "discord_krisp.node"),
+		filepath.Join(base, "app-*", "modules", "discord_krisp-*", "discord_krisp", "discord_krisp.node"),
+	}
+	disabled := 0
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			return err
+		}
+		for _, m := range matches {
+			if err := os.Rename(m, m+".disabled"); err != nil {
+				return err
+			}
+			disabled++
+		}
+	}
+	if disabled > 0 {
+		logMsg(fmt.Sprintf("Disabled %d Krisp module file(s) to prevent its signature-check crash.", disabled))
+	}
+	return nil
+}
+
 func run(resourcesDir string) error {
 	if err := installLatestVencordBuilds(); err != nil {
 		return err
@@ -350,25 +397,38 @@ func run(resourcesDir string) error {
 	}
 	logMsg("Vencord patched.")
 
-	openAsarActive, err := isOpenAsar(resourcesDir)
-	if err != nil {
-		return err
-	}
-	if openAsarActive {
-		// Not an error: this is the expected steady state once OpenAsar
-		// is already installed and the watcher re-patches Vencord
-		// without an intervening real Discord update wiping it. The
-		// upstream CLI's --install-openasar treats this as a hard
-		// failure for its one-shot interactive use case; a long-lived
-		// watcher just leaves it alone since the desired end state
-		// already holds.
-		logMsg("OpenAsar already installed, leaving as-is.")
-	} else {
-		logMsg("Applying OpenAsar...")
-		if err := installOpenAsar(resourcesDir); err != nil {
+	// OpenAsar is skipped by default on macOS: live testing found its own
+	// module update check (separate from Discord's or Vencord's) can hit
+	// "Host error" against a real pending Discord update and then hang
+	// indefinitely retrying, an unresolved bug in OpenAsar itself, not in
+	// anything this program does. Vencord alone, patched and re-signed
+	// with Krisp disabled, was verified to launch reliably across
+	// repeated cycles with no such issue. Opt in with
+	// VENCORD_WATCHDOG_ENABLE_OPENASAR=1 once that's fixed or you want to
+	// try it anyway.
+	if os.Getenv("VENCORD_WATCHDOG_ENABLE_OPENASAR") == "1" {
+		openAsarActive, err := isOpenAsar(resourcesDir)
+		if err != nil {
 			return err
 		}
-		logMsg("OpenAsar applied.")
+		if openAsarActive {
+			// Not an error: this is the expected steady state once
+			// OpenAsar is already installed and the watcher re-patches
+			// Vencord without an intervening real Discord update wiping
+			// it. The upstream CLI's --install-openasar treats this as a
+			// hard failure for its one-shot interactive use case; a
+			// long-lived watcher just leaves it alone since the desired
+			// end state already holds.
+			logMsg("OpenAsar already installed, leaving as-is.")
+		} else {
+			logMsg("Applying OpenAsar...")
+			if err := installOpenAsar(resourcesDir); err != nil {
+				return err
+			}
+			logMsg("OpenAsar applied.")
+		}
+	} else {
+		logMsg("Skipping OpenAsar (unresolved hang bug on macOS, see README). Set VENCORD_WATCHDOG_ENABLE_OPENASAR=1 to opt in.")
 	}
 
 	logMsg("Re-signing app bundle (ad-hoc) to repair the broken code signature...")
@@ -376,6 +436,10 @@ func run(resourcesDir string) error {
 		return err
 	}
 	logMsg("Re-signed.")
+
+	if err := disableKrisp(); err != nil {
+		return err
+	}
 	return nil
 }
 
