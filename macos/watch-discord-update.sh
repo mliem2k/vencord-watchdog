@@ -9,7 +9,8 @@
 # waits for app.asar to stop growing (the updater writing to it), then
 # re-patches Vencord (always fetching the latest build, mirroring the
 # Windows watcher's --repair, never just reapplying a cached copy) and
-# OpenAsar on top, via vencord_patch.py next to this script.
+# OpenAsar on top, via the vencord-patch-helper binary next to this
+# script (built from patcher/ by install-watcher.sh).
 #
 # Unlike Windows, no elevation is needed: /Applications/Discord.app is
 # normally owned by the current user and writable without sudo (Discord's
@@ -19,7 +20,7 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PATCH_SCRIPT="$SCRIPT_DIR/vencord_patch.py"
+PATCH_BINARY="$SCRIPT_DIR/vencord-patch-helper"
 LOG_DIR="$HOME/Library/Logs/VencordWatchdog"
 LOG_FILE="$LOG_DIR/watcher.log"
 
@@ -52,6 +53,11 @@ case "$BRANCH" in
 esac
 
 mkdir -p "$LOG_DIR"
+
+if [[ ! -x "$PATCH_BINARY" ]]; then
+    echo "Could not find vencord-patch-helper next to this script. Run install-watcher.sh first, which builds it." >&2
+    exit 1
+fi
 
 write_log() {
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $1" >> "$LOG_FILE"
@@ -117,7 +123,7 @@ invoke_patch() {
     # that clears up within a second or two.
     local attempt status
     for attempt in 1 2 3; do
-        /usr/bin/env python3 "$PATCH_SCRIPT" "$resources" >> "$LOG_FILE" 2>&1
+        "$PATCH_BINARY" "$resources" >> "$LOG_FILE" 2>&1
         status=$?
         [[ $status -eq 0 ]] && break
         if [[ $attempt -lt 3 ]]; then

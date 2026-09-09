@@ -26,7 +26,9 @@ then:
 ## Platforms
 
 - **Windows**: done, see [`windows/`](windows/).
-- **macOS**: done, see [`macos/`](macos/).
+- **macOS**: patching mechanics done and verified, but see the
+  [known issue](#known-issue-macos-can-hang-after-patching) below before
+  relying on it, see [`macos/`](macos/).
 
 ## Windows setup
 
@@ -73,12 +75,30 @@ Vencord-detection logic rather than the clean stub chain.
 
 ## macOS setup
 
+### Known issue: macOS can hang after patching
+
+Live testing turned up a real, unresolved bug: with only Vencord's stub
+patched in (no OpenAsar involved), Discord's renderer loads Vencord's
+plugin manager, starts the first plugin, then hangs indefinitely right
+after the gateway `FAST CONNECT` call, never reaching the main UI, a
+black window. An unpatched Discord reliably reaches the ready state
+every time under the same conditions; a Vencord-patched one hung every
+time this was tried. The cause is not yet identified (still open: is
+this specific to the exact Vencord build fetched from its latest
+release, a plugin compatibility issue with this Discord version, or
+something about the patch sequence itself). Until this is root-caused,
+treat the macOS watcher as not yet safe to run unattended: the patching
+mechanics (writing the stub, layering OpenAsar, re-signing) are verified
+correct and match upstream, but the patched result can leave Discord
+unusable until manually restored from a backup. Contributions
+investigating this are very welcome.
+
 Requirements:
 - Discord.app installed under `/Applications` (or `~/Applications`).
-- Python 3 (macOS ships `/usr/bin/python3` once Xcode Command Line Tools are
-  installed, `xcode-select --install`).
-- **App Management permission for Python**, see below. Without this the
-  watcher runs and logs cleanly but every patch attempt fails.
+- [Go](https://go.dev/doc/install), to compile the patch helper once at
+  install time.
+- **App Management permission for the patch helper**, see below. Without
+  this the watcher runs and logs cleanly but every patch attempt fails.
 
 No separate Vencord Installer download is needed on macOS: the watcher does
 its own patching directly (see [why](#why-macos-patches-itself-instead-of-driving-a-cli)
@@ -104,7 +124,7 @@ To remove it:
 
 Logs land at `~/Library/Logs/VencordWatchdog/watcher.log`.
 
-### Required: grant Python "App Management" permission
+### Required: grant the patch helper "App Management" permission
 
 macOS's App Management privacy control (introduced to stop one app from
 tampering with another's files) blocks renaming or replacing anything
@@ -122,16 +142,19 @@ for it. A background watcher can't, so it has to be granted ahead of time:
    (or run `open "x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles"`).
 2. macOS does not auto-list a background `launchd` agent's denied attempts
    here the way it sometimes does for other privacy panes, so there is
-   usually nothing to just toggle on; click **+** and add the interpreter
-   the watcher actually runs (find its real path with
-   `/usr/bin/env python3 -c "import sys; print(sys.executable)"`, since
-   `/usr/bin/python3` is commonly a shim to something else, e.g. Xcode
-   Command Line Tools' copy), then enable it.
+   usually nothing to just toggle on; click **+** and add
+   `macos/vencord-patch-helper` from wherever you cloned this repo (the
+   binary `install-watcher.sh` built), then enable it.
 3. Restart the watcher: `launchctl kickstart -k gui/$(id -u)/com.mliem2k.vencord-watchdog`
    (or just log out and back in).
 
 Do this once per machine. It does not need repeating after a Discord or
-Vencord update.
+Vencord update, and it's why the patch logic is a plain compiled
+executable rather than a script: TCC attributes this permission to
+whatever binary actually performs the file operations, and a script run
+through an interpreter means granting it to that interpreter (python3,
+wherever it happens to resolve to on your machine) instead of to
+anything specific to this project.
 
 ### Why the app gets re-signed after every patch
 
@@ -140,7 +163,7 @@ signed with: its `CodeResources` manifest hashes the original file
 contents, so afterward `codesign`/Gatekeeper reports "a sealed resource
 is missing or invalid" and macOS refuses to open the app at all
 ("Discord is damaged and can't be opened"), not merely a bypassable
-warning. `vencord_patch.py` re-signs the app ad-hoc (`codesign --force
+warning. The patch helper re-signs the app ad-hoc (`codesign --force
 --deep --sign -`) as the last step of every patch to fix this
 automatically; there is nothing to do here yourself. Worth knowing:
 since this changes what Discord looks like to macOS, it can trigger a
@@ -153,12 +176,13 @@ The Windows watcher shells out to `VencordInstallerCli.exe`, and the official
 [Vencord Installer](https://github.com/Vencord/Installer) releases a headless
 CLI build for Windows and Linux (`VencordInstallerCli.exe` /
 `VencordInstallerCli-linux`). It does not release one for macOS, only a GUI
-`VencordInstaller.app` with no scriptable/headless mode. Rather than requiring
-Go to build an unofficial CLI from source, `vencord_patch.py` ports the
-relevant parts of the installer's own patch logic directly (writing the tiny
+`VencordInstaller.app` with no scriptable/headless mode. Rather than
+requiring the official installer to already be present, `macos/patcher`
+ports the relevant parts of its own patch logic directly (writing the tiny
 stub `app.asar`, fetching the latest Vencord build, layering OpenAsar), so
-setup only needs Python 3, which is already on any Mac with Xcode Command
-Line Tools.
+there's nothing else to install first. It's written in Go and compiled to
+a standalone binary at install time (see the App Management section above
+for why that's a plain compiled executable rather than a script).
 
 ### How update detection differs from Windows
 

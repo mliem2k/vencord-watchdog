@@ -44,17 +44,31 @@ esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WATCH_SCRIPT="$SCRIPT_DIR/watch-discord-update.sh"
-PATCH_SCRIPT="$SCRIPT_DIR/vencord_patch.py"
+PATCHER_SRC_DIR="$SCRIPT_DIR/patcher"
+PATCH_BINARY="$SCRIPT_DIR/vencord-patch-helper"
 
 if [[ ! -f "$WATCH_SCRIPT" ]]; then
     echo "Could not find watch-discord-update.sh next to this installer." >&2
     exit 1
 fi
-if [[ ! -f "$PATCH_SCRIPT" ]]; then
-    echo "Could not find vencord_patch.py next to this installer." >&2
+if [[ ! -d "$PATCHER_SRC_DIR" ]]; then
+    echo "Could not find the patcher/ source directory next to this installer." >&2
     exit 1
 fi
-chmod +x "$WATCH_SCRIPT" "$PATCH_SCRIPT"
+
+if ! command -v go >/dev/null 2>&1; then
+    echo "Go is required to build the patch helper (compiled once, here, at install time)." >&2
+    echo "Install it from https://go.dev/doc/install, then re-run this script." >&2
+    exit 1
+fi
+
+# Compiled to a standalone binary rather than shipped as a script so
+# macOS's App Management privacy grant (see the README) can point at one
+# stable, easy-to-find executable instead of a python3/etc interpreter
+# path buried inside some other tool's install.
+echo "Building the patch helper..."
+(cd "$PATCHER_SRC_DIR" && go build -o "$PATCH_BINARY" .)
+chmod +x "$WATCH_SCRIPT" "$PATCH_BINARY"
 
 LABEL="com.mliem2k.vencord-watchdog"
 PLIST_DIR="$HOME/Library/LaunchAgents"
