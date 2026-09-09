@@ -1,2 +1,7 @@
 *.log
 macos/vencord-patch-helper
+
+# OS / editor junk
+.DS_Store
+*.swp
+*~

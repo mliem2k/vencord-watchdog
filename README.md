@@ -1,7 +1,20 @@
 # vencord-watchdog
 
+[![CI](https://github.com/mliem2k/vencord-watchdog/actions/workflows/ci.yml/badge.svg)](https://github.com/mliem2k/vencord-watchdog/actions/workflows/ci.yml)
+
 Keeps [Vencord](https://vencord.dev) and [OpenAsar](https://github.com/GooseMod/OpenAsar)
 patched into Discord automatically, every time Discord updates.
+
+## Contents
+
+- [The problem](#the-problem)
+- [What this does](#what-this-does)
+- [Platforms](#platforms)
+- [Windows setup](#windows-setup)
+- [macOS setup](#macos-setup)
+  - [Known issue: OpenAsar can hang on macOS](#known-issue-openasar-can-hang-on-macos)
+  - [Required: grant the patch helper "App Management" permission](#required-grant-the-patch-helper-app-management-permission)
+- [License](#license)
 
 ## The problem
 

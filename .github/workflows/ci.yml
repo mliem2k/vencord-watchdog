@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go build, vet, format
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: macos/patcher
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: gofmt
+        run: |
+          fmt_out="$(gofmt -l .)"
+          if [ -n "$fmt_out" ]; then
+            echo "$fmt_out"
+            echo "Run 'gofmt -w .' in macos/patcher"
+            exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+      - name: go build
+        run: go build -o /tmp/vencord-patch-helper .
+
+  shellcheck:
+    name: Shellcheck (macOS scripts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck macos/*.sh
+
+  psscriptanalyzer:
+    name: PSScriptAnalyzer (Windows scripts)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+      - name: Analyze
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path windows -Recurse -Severity Warning,Error -Settings windows/PSScriptAnalyzerSettings.psd1
+          $results | Format-Table -AutoSize
+          if ($results.Count -gt 0) { exit 1 }
