@@ -11,9 +11,16 @@ patched into Discord automatically, every time Discord updates.
 - [What this does](#what-this-does)
 - [Platforms](#platforms)
 - [Windows setup](#windows-setup)
+  - [Why the task needs to run elevated](#why-the-task-needs-to-run-elevated)
+  - [Why Vencord before OpenAsar](#why-vencord-before-openasar)
 - [macOS setup](#macos-setup)
   - [Known issue: OpenAsar can hang on macOS](#known-issue-openasar-can-hang-on-macos)
   - [Required: grant the patch helper "App Management" permission](#required-grant-the-patch-helper-app-management-permission)
+  - [Why the app gets re-signed after every patch](#why-the-app-gets-re-signed-after-every-patch)
+  - [Why Krisp (voice noise suppression) gets disabled](#why-krisp-voice-noise-suppression-gets-disabled)
+  - [Why macOS patches itself instead of driving a CLI](#why-macos-patches-itself-instead-of-driving-a-cli)
+  - [How update detection differs from Windows](#how-update-detection-differs-from-windows)
+- [Development](#development)
 - [License](#license)
 
 ## The problem
@@ -187,9 +194,9 @@ fully logged in and usable regardless of how that prompt is answered.
 ### Why Krisp (voice noise suppression) gets disabled
 
 A second, sharper consequence of the same re-signing: Discord's Krisp
-native module (`discord_krisp.node`, AI noise suppression for voice
-chat, a separate feature from voice chat itself) does its own signature
-check on startup, and instead of failing gracefully when the app isn't
+native module (`discord_krisp.node`, an AI noise-suppression add-on for
+voice chat, not voice chat itself) does its own signature check on
+startup, and instead of failing gracefully when the app isn't
 signed with Discord's real certificate, it segfaults. Electron responds
 to that crash by immediately relaunching a fresh renderer, which hits
 the identical crash and gets relaunched again, forever: an infinite
@@ -214,11 +221,12 @@ CLI build for Windows and Linux (`VencordInstallerCli.exe` /
 `VencordInstallerCli-linux`). It does not release one for macOS, only a GUI
 `VencordInstaller.app` with no scriptable/headless mode. Rather than
 requiring the official installer to already be present, `macos/patcher`
-ports the relevant parts of its own patch logic directly (writing the tiny
-stub `app.asar`, fetching the latest Vencord build, layering OpenAsar), so
-there's nothing else to install first. It's written in Go and compiled to
-a standalone binary at install time (see the App Management section above
-for why that's a plain compiled executable rather than a script).
+ports the relevant parts of the official installer's own patch logic
+directly (writing the tiny stub `app.asar`, fetching the latest Vencord
+build, layering OpenAsar), so there's nothing else to install first. It's
+written in Go and compiled to a standalone binary at install time (see the
+App Management section above for why that's a plain compiled executable
+rather than a script).
 
 ### How update detection differs from Windows
 
@@ -228,6 +236,21 @@ Discord's macOS updater replaces `Contents/Resources` of the same
 `Discord.app` bundle in place instead, so there's no new folder to watch.
 The macOS watcher polls `Contents/Info.plist`'s `CFBundleVersion` for a
 change, then waits for `app.asar`'s size to stop changing before patching.
+
+## Development
+
+CI runs the same checks below on every push and pull request.
+
+```sh
+# Go patcher (macos/patcher)
+cd macos/patcher && gofmt -l . && go vet ./... && go build -o /tmp/vencord-patch-helper .
+
+# macOS shell scripts
+shellcheck macos/*.sh
+
+# Windows PowerShell scripts
+Invoke-ScriptAnalyzer -Path windows -Recurse -Severity Warning,Error -Settings windows/PSScriptAnalyzerSettings.psd1
+```
 
 ## License
 
