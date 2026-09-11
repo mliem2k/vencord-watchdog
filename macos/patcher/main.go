@@ -362,7 +362,73 @@ func resignApp(resourcesDir string) error {
 	if err != nil {
 		return fmt.Errorf("codesign failed: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
+
+	if err := pinDesignatedRequirement(appBundle); err != nil {
+		return err
+	}
 	return nil
+}
+
+// pinDesignatedRequirement re-signs just the outer app bundle a second
+// time (never --deep, so nested code keeps the requirement --deep already
+// gave it above) with an explicit designated requirement of "this bundle
+// identifies as Discord", replacing ad hoc signing's own auto-derived
+// default of "cdhash matches this exact build".
+//
+// Discord's own auto-updater (Squirrel/ShipIt) verifies a downloaded
+// update against the CURRENTLY INSTALLED app's designated requirement
+// before installing it (SQRLInstaller extracts it via
+// SQRLCodeSignature.signatureWithBundle: on request.targetBundleURL,
+// then checks the staged update bundle against that same requirement).
+// A cdhash-pinned requirement can never be satisfied by ANY future
+// update, since a different release is a different binary with a
+// different hash by definition: ShipIt's install step permanently fails
+// with SQRLCodeSignatureErrorDomain code -1 every time, and Discord,
+// finding an update it can never finish applying, just quits on launch
+// and never comes back, with nothing in its own UI explaining why.
+// Reproduced directly: after ad hoc --deep signing alone, Discord
+// launched, detected 0.0.411 was available, quit to hand off to ShipIt,
+// and ShipIt's install attempt failed this exact way every single time,
+// eventually leaving Discord permanently unable to launch at all.
+//
+// An identifier-only requirement has no such problem: it only checks
+// the CANDIDATE bundle's own Info.plist CFBundleIdentifier, which a
+// real Discord update still carries regardless of its own signature,
+// so it verifies successfully against every future release the same
+// way it did against this one. Verified directly with
+// `codesign --verify --deep --strict -R='identifier "..."'` against a
+// real staged Discord update bundle.
+func pinDesignatedRequirement(appBundle string) error {
+	identifier, err := bundleIdentifier(appBundle)
+	if err != nil {
+		return err
+	}
+	requirement := fmt.Sprintf(`designated => identifier %q`, identifier)
+	// codesign's -r flag only takes an explicit requirement string as a
+	// single "-r=<value>" argument; passed as two separate argv elements
+	// ("-r", value) it's misparsed as the older, unrelated -r
+	// <resource-rules-plist-path> flag instead, which then reports the
+	// requirement text itself as "No such file or directory".
+	cmd := exec.Command("codesign", "--force", "--sign", "-", "-r="+requirement, appBundle)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("codesign (designated requirement) failed: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func bundleIdentifier(appBundle string) (string, error) {
+	infoPlist := filepath.Join(appBundle, "Contents", "Info.plist")
+	cmd := exec.Command("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleIdentifier", infoPlist)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("reading CFBundleIdentifier from %s: %w", infoPlist, err)
+	}
+	identifier := strings.TrimSpace(string(out))
+	if identifier == "" {
+		return "", fmt.Errorf("%s has an empty CFBundleIdentifier", infoPlist)
+	}
+	return identifier, nil
 }
 
 // isPrimaryBundleBinary reports whether path is the conventional primary
