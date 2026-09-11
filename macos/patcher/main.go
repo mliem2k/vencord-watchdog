@@ -17,11 +17,13 @@
 package main
 
 import (
+	"debug/macho"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -332,10 +334,101 @@ func installOpenAsar(resourcesDir string) error {
 // where modifying the bundle needs it.
 func resignApp(resourcesDir string) error {
 	appBundle := filepath.Dir(filepath.Dir(resourcesDir))
+
+	// --deep only re-signs a .app/.framework's own primary binary at its
+	// conventional location; a loose Mach-O executable sitting elsewhere
+	// (a helper tool under a framework's Resources dir, a native .node
+	// addon, a bundled dylib) is left with Discord's ORIGINAL signature,
+	// team-mismatched against everything --deep just re-signed ad hoc.
+	// That alone is harmless for a process with no hardened runtime (most
+	// of Discord.app isn't), but any hardened-runtime process among them
+	// enforces Library Validation and refuses to load a sibling whose
+	// signing identity no longer matches its own: reproduced directly via
+	// Squirrel.framework's ShipIt (hardened runtime) crash-looping trying
+	// to load Mantle.framework (re-signed ad hoc by --deep) the moment
+	// its own copy was still the original Discord signature.
+	//
+	// Sign these first, so their new signature bytes are already in
+	// place before --deep below reseals each containing .framework's own
+	// CodeResources manifest (which hashes every file under it,
+	// including these); signing them AFTER that reseal would invalidate
+	// the container's own seal of the exact file just re-signed.
+	if err := signLooseExecutables(appBundle); err != nil {
+		return err
+	}
+
 	cmd := exec.Command("codesign", "--force", "--deep", "--sign", "-", appBundle)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("codesign failed: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// isPrimaryBundleBinary reports whether path is the conventional primary
+// binary --deep already re-signs on its own (Contents/MacOS/<name> for a
+// .app, or Versions/<ver>/<FrameworkName> for a .framework), so it isn't
+// re-signed a second time here.
+func isPrimaryBundleBinary(path string) bool {
+	dir, name := filepath.Split(path)
+	dir = strings.TrimSuffix(dir, string(filepath.Separator))
+	if strings.HasSuffix(dir, string(filepath.Separator)+"MacOS") {
+		return true
+	}
+	parent := filepath.Dir(dir)
+	if strings.HasPrefix(filepath.Base(parent), name+".framework") {
+		return true
+	}
+	return false
+}
+
+func isMachO(path string) bool {
+	if f, err := macho.Open(path); err == nil {
+		f.Close()
+		return true
+	}
+	if f, err := macho.OpenFat(path); err == nil {
+		f.Close()
+		return true
+	}
+	return false
+}
+
+func signLooseExecutables(appBundle string) error {
+	var signed int
+	err := filepath.WalkDir(appBundle, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&0o111 == 0 {
+			return nil
+		}
+		if isPrimaryBundleBinary(path) {
+			return nil
+		}
+		if !isMachO(path) {
+			return nil
+		}
+		cmd := exec.Command("codesign", "--force", "--sign", "-", path)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("codesign %s: %w (%s)", path, err, strings.TrimSpace(string(out)))
+		}
+		signed++
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if signed > 0 {
+		logMsg(fmt.Sprintf("Re-signed %d loose executable(s) --deep would otherwise miss.", signed))
 	}
 	return nil
 }
