@@ -83,6 +83,16 @@ get_asar_size() {
     stat -f "%z" "$1/Contents/Resources/app.asar" 2>/dev/null
 }
 
+# Discord's own asar is tiny once Vencord/OpenAsar are applied, so this
+# can't check for a size threshold, only that a real, non-empty asar
+# exists at all. A bundle with none (or a zero-byte one) is a half
+# written update, which must never be treated as patched or relaunched.
+has_valid_asar() {
+    local size
+    size="$(get_asar_size "$1")"
+    [[ -n "$size" && "$size" -gt 0 ]]
+}
+
 invoke_patch() {
     local discord_app="$1"
     local resources="$discord_app/Contents/Resources"
@@ -133,14 +143,25 @@ invoke_patch() {
     done
     if [[ $status -ne 0 ]]; then
         write_log "Patch failed after $attempt attempts (exit $status), see above."
+    elif ! has_valid_asar "$discord_app"; then
+        write_log "ERROR: $discord_app has no valid app.asar after patching -- refusing to relaunch a broken install."
+        status=1
     else
         write_log "Patch complete."
     fi
 
-    if [[ $was_running -eq 1 ]]; then
+    # Never relaunch into a bundle we just confirmed is broken: unlike the
+    # Windows watcher, there is no separate previous-version folder to
+    # fall back to here, since macOS patches Contents/Resources in place.
+    # Leaving Discord closed is safer than launching something that can
+    # only crash, and the bundle stays exactly as broken (not worse) for
+    # whoever looks at it next.
+    if [[ $was_running -eq 1 && $status -eq 0 ]]; then
         write_log "Relaunching Discord..."
         open "$discord_app"
     fi
+
+    return $status
 }
 
 DISCORD_APP="$(resolve_discord_app)"
@@ -171,8 +192,19 @@ while true; do
             fi
             last_size="$size"
         done
-        invoke_patch "$DISCORD_APP"
+        if ! has_valid_asar "$DISCORD_APP"; then
+            write_log "WARNING: $DISCORD_APP never settled on a valid asar within the timeout; patching anyway."
+        fi
+
+        if invoke_patch "$DISCORD_APP"; then
+            write_log "Repatch complete for version $CURRENT_VERSION"
+        else
+            write_log "ERROR: Giving up patching $CURRENT_VERSION for now."
+        fi
+        # Record the version as seen either way, and pause before re-checking,
+        # so a bundle that keeps flapping gets retried on a slow cadence
+        # instead of hammering the patch helper in a tight loop.
         LAST_VERSION="$CURRENT_VERSION"
-        write_log "Repatch complete for version $LAST_VERSION"
+        sleep 15
     fi
 done
