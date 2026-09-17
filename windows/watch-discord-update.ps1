@@ -156,7 +156,16 @@ while ($true) {
     if ($current -and $current.Name -ne $lastVersion) {
         Write-Log "Detected version folder: $($current.Name) (was $lastVersion). Waiting for updater to settle..."
         if (-not (Wait-ForUpdaterIdle $current)) {
-            Write-Log "WARNING: $($current.Name) never fully settled within the timeout; patching anyway."
+            # Never patch (or force-kill Update.exe) while the updater might
+            # still be mid-extraction. Doing that anyway is what used to corrupt
+            # the folder, which makes Discord's own updater restart the whole
+            # update from scratch -- and this watcher would then re-detect that
+            # restart as a "new" version and repeat the same destructive cycle,
+            # fighting Discord's updater indefinitely instead of ever finishing
+            # a patch. Keep waiting on the next poll instead; $lastVersion is
+            # deliberately left unset so this same folder gets retried.
+            Write-Log "WARNING: $($current.Name) still hasn't settled; will keep waiting rather than interrupt Discord's own updater."
+            continue
         }
 
         $ok = $false
