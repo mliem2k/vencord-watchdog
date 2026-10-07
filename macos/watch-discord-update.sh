@@ -157,6 +157,15 @@ invoke_patch() {
     # only crash, and the bundle stays exactly as broken (not worse) for
     # whoever looks at it next.
     if [[ $was_running -eq 1 && $status -eq 0 ]]; then
+        # Discord's own updater can relaunch it mid-patch, while the bundle
+        # is half re-signed (mixed Team IDs, dyld "Library not loaded"). Kill
+        # any such instance so the relaunch below starts from a clean bundle.
+        pkill -f "$proc_pattern" 2>/dev/null
+        local waited=0
+        while pgrep -f "$proc_pattern" >/dev/null 2>&1 && [[ $waited -lt 10 ]]; do
+            sleep 0.5
+            waited=$((waited + 1))
+        done
         write_log "Relaunching Discord..."
         open "$discord_app"
     fi
